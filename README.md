@@ -33,11 +33,7 @@ chmod +x setup.sh
 ./setup.sh
 
 # Cách 2: Sử dụng setup_vast.sh (cho môi trường vast.ai GPU)
-# Lưu ý: Cần tải thủ công các file dữ liệu trước khi chạy script
-# Tải các file sau và đặt vào thư mục data/:
-# - dynamic_labeled_train.csv
-# - dynamic_labeled_dev.csv
-# - dynamic_labeled_test.csv
+# Script sẽ tự động tải dữ liệu từ Google Drive
 chmod +x setup_vast.sh
 ./setup_vast.sh
 
