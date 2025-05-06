@@ -14,7 +14,7 @@ class Config:
     
     # Training parameters
     BATCH_SIZE = 16
-    NUM_EPOCHS = 100
+    NUM_EPOCHS = 20
     LEARNING_RATE = 0.0001
     WEIGHT_DECAY = 1e-5
     

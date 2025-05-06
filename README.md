@@ -88,7 +88,7 @@ Các tham số mô hình có thể điều chỉnh trong file `config.py`:
 - `BATCH_SIZE`: Kích thước batch (mặc định: 16)
 - `EMBEDDING_DIM`: Kích thước embedding (mặc định: 64)
 - `NUM_HEADS`: Số lượng attention heads (mặc định: 8)
-- `NUM_EPOCHS`: Số epoch training (mặc định: 100)
+- `NUM_EPOCHS`: Số epoch training (mặc định: 20)
 - `LEARNING_RATE`: Tốc độ học (mặc định: 0.0001)
 - `DROPOUT`: Tỷ lệ dropout (mặc định: 0.1)
 - `WEIGHT_DECAY`: Hệ số L2 regularization (mặc định: 1e-5)
