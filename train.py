@@ -9,6 +9,28 @@ from models.time_aware_transformer import TimeAwareTransformer
 from utils.data_utils import get_data_loaders
 from config import Config
 
+class EarlyStopping:
+    """
+    Early stopping to prevent overfitting
+    """
+    def __init__(self, patience=5, min_delta=0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_loss = None
+        self.early_stop = False
+        
+    def __call__(self, val_loss):
+        if self.best_loss is None:
+            self.best_loss = val_loss
+        elif val_loss > self.best_loss - self.min_delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_loss = val_loss
+            self.counter = 0
+
 def train_epoch(model, train_loader, criterion, optimizer, device):
     """
     Train model for one epoch
@@ -157,6 +179,9 @@ def main():
     # Create checkpoints directory
     os.makedirs("checkpoints", exist_ok=True)
     
+    # Initialize early stopping
+    early_stopping = EarlyStopping(patience=5, min_delta=0.001)
+    
     # Training loop
     print("\nStarting training...")
     best_dev_accuracy = 0
@@ -184,6 +209,12 @@ def main():
             best_dev_accuracy = dev_accuracy
             torch.save(model.state_dict(), "checkpoints/best_model.pth")
             print(f"Saved best model with dev accuracy: {best_dev_accuracy:.4f}")
+        
+        # Check early stopping
+        early_stopping(dev_loss)
+        if early_stopping.early_stop:
+            print(f"\nEarly stopping triggered after {epoch+1} epochs")
+            break
     
     # Evaluate on test set
     print("\nEvaluating on test set...")
