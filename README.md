@@ -28,14 +28,15 @@ XAUUSDProject/
 
 1. Tạo môi trường Python và cài đặt các thư viện cần thiết:
 ```bash
-# Cách 1: Sử dụng setup.sh (khuyến nghị cho môi trường local)
+# Cách 1: Sử dụng setup.sh (tải dữ liệu từ Kaggle)
+# Yêu cầu: Đặt file kaggle.json vào thư mục ~/.kaggle/
 chmod +x setup.sh
 ./setup.sh
 
-# Cách 2: Sử dụng setup_vast.sh (cho môi trường vast.ai GPU)
-# Script sẽ tự động tải dữ liệu từ Google Drive
-chmod +x setup_vast.sh
-./setup_vast.sh
+# Cách 2: Sử dụng setup_drive.sh (tải dữ liệu từ Google Drive)
+# Không yêu cầu kaggle.json, phù hợp khi không có quyền truy cập Kaggle
+chmod +x setup_drive.sh
+./setup_drive.sh
 
 # Cách 3: Cài đặt thủ công
 python -m venv venv
@@ -46,7 +47,7 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 ```
 
-2. Đặt file `kaggle.json` vào thư mục `~/.kaggle/` để có thể tải dữ liệu từ Kaggle (chỉ cần thiết khi sử dụng setup.sh).
+2. Đặt file `kaggle.json` vào thư mục `~/.kaggle/` để có thể tải dữ liệu từ Kaggle (chỉ cần thiết khi sử dụng Cách 1).
 
 ## Dữ liệu
 
