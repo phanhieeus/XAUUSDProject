@@ -1,19 +1,82 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-from sklearn.metrics import classification_report
-import os
-
+import numpy as np
 from models.time_aware_transformer import TimeAwareTransformer
-from utils.data_utils import get_data_loaders
-from config import Config
+from data.dataset import XAUUSDDataset
+from config import *
+import os
+import logging
+from datetime import datetime
+
+# Thiết lập logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('training.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+def train_epoch(model, train_loader, criterion, optimizer, device):
+    model.train()
+    total_loss = 0
+    correct = 0
+    total = 0
+    
+    for batch_idx, (features, timestamps, labels) in enumerate(train_loader):
+        features, timestamps, labels = features.to(device), timestamps.to(device), labels.to(device)
+        
+        optimizer.zero_grad()
+        outputs = model(features, timestamps)
+        
+        # Calculate loss
+        loss = criterion(outputs, labels)
+        
+        # Add regularization for time decay
+        time_decay_reg = 0
+        for block in model.transformer_blocks:
+            time_decay_reg += torch.mean(block.attention.time_decay)
+        loss += TIME_DECAY_REG * time_decay_reg
+        
+        loss.backward()
+        optimizer.step()
+        
+        total_loss += loss.item()
+        _, predicted = outputs.max(1)
+        total += labels.size(0)
+        correct += predicted.eq(labels).sum().item()
+        
+        if batch_idx % 100 == 0:
+            logger.info(f'Batch {batch_idx}/{len(train_loader)}: Loss: {loss.item():.4f}, Acc: {100.*correct/total:.2f}%')
+    
+    return total_loss / len(train_loader), 100. * correct / total
+
+def validate(model, val_loader, criterion, device):
+    model.eval()
+    total_loss = 0
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for features, timestamps, labels in val_loader:
+            features, timestamps, labels = features.to(device), timestamps.to(device), labels.to(device)
+            outputs = model(features, timestamps)
+            loss = criterion(outputs, labels)
+            
+            total_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
+    
+    return total_loss / len(val_loader), 100. * correct / total
 
 class EarlyStopping:
-    """
-    Early stopping to prevent overfitting
-    """
-    def __init__(self, patience=5, min_delta=0):
+    def __init__(self, patience=5, min_delta=0.001):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -31,200 +94,71 @@ class EarlyStopping:
             self.best_loss = val_loss
             self.counter = 0
 
-def train_epoch(model, train_loader, criterion, optimizer, device):
-    """
-    Train model for one epoch
-    
-    Args:
-        model: TimeAwareTransformer model
-        train_loader: DataLoader for training data
-        criterion: Loss function
-        optimizer: Optimizer
-        device: Device to run on (cuda/cpu)
-    
-    Returns:
-        tuple: (average loss, accuracy)
-    """
-    model.train()
-    total_loss = 0
-    correct = 0
-    total = 0
-    
-    pbar = tqdm(train_loader, desc="Training")
-    for features, timestamps, labels in pbar:
-        # Move data to device
-        features = features.to(device)  # [batch_size, seq_len, input_dim]
-        timestamps = timestamps.to(device)  # [batch_size, seq_len, 1]
-        labels = labels.to(device)  # [batch_size]
-        
-        # Forward pass
-        optimizer.zero_grad()
-        outputs = model(features, timestamps)  # [batch_size, num_classes]
-        loss = criterion(outputs, labels)
-        
-        # Add time decay regularization
-        time_decay_reg = Config.TIME_DECAY_REG * torch.abs(model.time_aware_attention.time_decay)
-        loss = loss + time_decay_reg
-        
-        # Backward pass
-        loss.backward()
-        optimizer.step()
-        
-        # Update statistics
-        total_loss += loss.item()
-        _, predicted = outputs.max(1)  # [batch_size]
-        total += labels.size(0)
-        correct += predicted.eq(labels).sum().item()
-        
-        # Update progress bar
-        pbar.set_postfix({
-            'loss': f'{total_loss/total:.4f}',
-            'acc': f'{100.*correct/total:.2f}%'
-        })
-    
-    return total_loss/len(train_loader), correct/total
-
-def evaluate(model, data_loader, criterion, device, desc="Evaluating"):
-    """
-    Evaluate model on a dataset
-    
-    Args:
-        model: TimeAwareTransformer model
-        data_loader: DataLoader for evaluation data
-        criterion: Loss function
-        device: Device to run on (cuda/cpu)
-        desc: Description for progress bar
-    
-    Returns:
-        tuple: (average loss, accuracy, classification report)
-    """
-    model.eval()
-    total_loss = 0
-    all_preds = []
-    all_labels = []
-    
-    with torch.no_grad():
-        pbar = tqdm(data_loader, desc=desc)
-        for features, timestamps, labels in pbar:
-            # Move data to device
-            features = features.to(device)  # [batch_size, seq_len, input_dim]
-            timestamps = timestamps.to(device)  # [batch_size, seq_len, 1]
-            labels = labels.to(device)  # [batch_size]
-            
-            # Forward pass
-            outputs = model(features, timestamps)  # [batch_size, num_classes]
-            loss = criterion(outputs, labels)
-            
-            # Update statistics
-            total_loss += loss.item()
-            _, predicted = outputs.max(1)  # [batch_size]
-            
-            # Store predictions and labels
-            all_preds.extend(predicted.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-            
-            # Update progress bar
-            pbar.set_postfix({'loss': f'{total_loss/len(data_loader):.4f}'})
-    
-    # Calculate metrics
-    accuracy = sum(p == l for p, l in zip(all_preds, all_labels)) / len(all_labels)
-    report = classification_report(
-        all_labels, 
-        all_preds, 
-        target_names=['HOLD', 'BUY', 'SELL'],
-        digits=4
-    )
-    
-    return total_loss/len(data_loader), accuracy, report
-
 def main():
-    # Set device
-    device = torch.device(Config.DEVICE if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    # Thiết lập device
+    device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
     
-    # Check if processed data exists
-    if not all(os.path.exists(path) for path in [Config.TRAIN_PATH, Config.DEV_PATH, Config.TEST_PATH]):
-        print("Processed data files not found. Please run preprocessing first:")
-        print("python utils/preprocess_data.py")
-        return
+    # Tạo thư mục checkpoints nếu chưa tồn tại
+    os.makedirs('checkpoints', exist_ok=True)
     
-    # Get data loaders
-    print("Loading data...")
-    train_loader, dev_loader, test_loader = get_data_loaders(
-        Config.TRAIN_PATH,
-        Config.DEV_PATH,
-        Config.TEST_PATH,
-        Config.SEQUENCE_LENGTH,
-        Config.BATCH_SIZE
-    )
+    # Load data
+    logger.info("Loading data...")
+    train_dataset = XAUUSDDataset(TRAIN_PATH)
+    val_dataset = XAUUSDDataset(VAL_PATH)
     
-    # Initialize model
-    print("Initializing model...")
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE)
+    
+    # Khởi tạo model
+    logger.info("Initializing model...")
     model = TimeAwareTransformer(
-        input_dim=Config.INPUT_DIM,  # 2 for Close and Volume
-        embedding_dim=Config.EMBEDDING_DIM,
-        num_heads=Config.NUM_HEADS,
-        num_classes=Config.NUM_CLASSES,  # 3 for HOLD, BUY, SELL
-        dropout=Config.DROPOUT
+        input_dim=INPUT_DIM,
+        embedding_dim=EMBEDDING_DIM,
+        num_heads=NUM_HEADS,
+        num_classes=NUM_CLASSES,
+        num_layers=NUM_LAYERS,
+        dropout=DROPOUT
     ).to(device)
     
-    # Initialize optimizer and criterion
-    optimizer = optim.Adam(
-        model.parameters(),
-        lr=Config.LEARNING_RATE,
-        weight_decay=Config.WEIGHT_DECAY
-    )
+    # Loss function và optimizer
     criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     
-    # Create checkpoints directory
-    os.makedirs("checkpoints", exist_ok=True)
+    # Learning rate scheduler
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
     
-    # Initialize early stopping
-    early_stopping = EarlyStopping(patience=5, min_delta=0.001)
+    # Early stopping
+    early_stopping = EarlyStopping(patience=EARLY_STOPPING_PATIENCE)
     
     # Training loop
-    print("\nStarting training...")
-    best_dev_accuracy = 0
-    for epoch in range(Config.NUM_EPOCHS):
-        print(f"\nEpoch {epoch+1}/{Config.NUM_EPOCHS}")
+    logger.info("\nStarting training...")
+    for epoch in range(NUM_EPOCHS):
+        logger.info(f"\nEpoch {epoch+1}/{NUM_EPOCHS}")
         
         # Train
-        train_loss, train_accuracy = train_epoch(
-            model, train_loader, criterion, optimizer, device
-        )
+        train_loss, train_accuracy = train_epoch(model, train_loader, criterion, optimizer, device)
         
-        # Evaluate on dev
-        dev_loss, dev_accuracy, dev_report = evaluate(
-            model, dev_loader, criterion, device, desc="Validating"
-        )
+        # Validate
+        val_loss, val_accuracy = validate(model, val_loader, criterion, device)
         
-        # Print metrics
-        print(f"Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}")
-        print(f"Dev Loss: {dev_loss:.4f}, Dev Accuracy: {dev_accuracy:.4f}")
-        print("\nDev Classification Report:")
-        print(dev_report)
+        # Update learning rate
+        scheduler.step(val_loss)
         
-        # Save best model
-        if dev_accuracy > best_dev_accuracy:
-            best_dev_accuracy = dev_accuracy
-            torch.save(model.state_dict(), "checkpoints/best_model.pth")
-            print(f"Saved best model with dev accuracy: {best_dev_accuracy:.4f}")
+        # Log metrics
+        logger.info(f'Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.2f}%')
+        logger.info(f'Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%')
+        logger.info(f'Learning Rate: {optimizer.param_groups[0]["lr"]:.6f}')
         
         # Check early stopping
-        early_stopping(dev_loss)
+        early_stopping(val_loss)
         if early_stopping.early_stop:
-            print(f"\nEarly stopping triggered after {epoch+1} epochs")
+            logger.info(f"Early stopping triggered after {epoch+1} epochs")
             break
     
-    # Evaluate on test set
-    print("\nEvaluating on test set...")
-    model.load_state_dict(torch.load("checkpoints/best_model.pth"))
-    test_loss, test_accuracy, test_report = evaluate(
-        model, test_loader, criterion, device, desc="Testing"
-    )
-    print(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.4f}")
-    print("\nTest Classification Report:")
-    print(test_report)
+    # Save model
+    torch.save(model.state_dict(), 'checkpoints/model.pth')
+    logger.info("Training completed and model saved")
 
 if __name__ == "__main__":
     main() 

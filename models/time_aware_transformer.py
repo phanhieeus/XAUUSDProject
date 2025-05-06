@@ -38,6 +38,8 @@ class FeatureEmbedding(nn.Module):
     def __init__(self, input_dim, embedding_dim):
         super().__init__()
         self.embedding = nn.Linear(input_dim, embedding_dim)
+        self.norm = nn.LayerNorm(embedding_dim)
+        self.dropout = nn.Dropout(0.1)
         
     def forward(self, x):
         """
@@ -46,10 +48,12 @@ class FeatureEmbedding(nn.Module):
         Returns:
             tensor shape [batch_size, seq_len, embedding_dim] - feature embeddings
         """
-        return self.embedding(x)
+        x = self.embedding(x)
+        x = self.norm(x)
+        return self.dropout(x)
 
 class TimeAwareAttention(nn.Module):
-    def __init__(self, embedding_dim, num_heads):
+    def __init__(self, embedding_dim, num_heads, dropout=0.1):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.num_heads = num_heads
@@ -64,11 +68,15 @@ class TimeAwareAttention(nn.Module):
         # Time decay parameter
         self.time_decay = nn.Parameter(torch.ones(1))
         
-    def forward(self, x, timestamps):
+        # Dropout
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x, timestamps, attention_mask=None):
         """
         Args:
             x: tensor shape [batch_size, seq_len, embedding_dim] - input embeddings
             timestamps: tensor shape [batch_size, seq_len, 1] - normalized timestamps
+            attention_mask: tensor shape [batch_size, seq_len] - attention mask
         Returns:
             tensor shape [batch_size, seq_len, embedding_dim] - attended embeddings
         """
@@ -96,8 +104,13 @@ class TimeAwareAttention(nn.Module):
         decay_weights = decay_weights.unsqueeze(1)  # [batch_size, 1, seq_len, seq_len]
         scores = scores * decay_weights  # [batch_size, num_heads, seq_len, seq_len]
         
+        # Apply attention mask if provided
+        if attention_mask is not None:
+            scores = scores.masked_fill(attention_mask.unsqueeze(1).unsqueeze(2) == 0, float('-inf'))
+        
         # Apply softmax
         attn_weights = torch.softmax(scores, dim=-1)  # [batch_size, num_heads, seq_len, seq_len]
+        attn_weights = self.dropout(attn_weights)
         
         # Apply attention weights to values
         attn_output = torch.matmul(attn_weights, v)  # [batch_size, num_heads, seq_len, head_dim]
@@ -111,42 +124,88 @@ class TimeAwareAttention(nn.Module):
         
         return attn_output
 
+class TransformerBlock(nn.Module):
+    def __init__(self, embedding_dim, num_heads, dropout=0.1):
+        super().__init__()
+        self.attention = TimeAwareAttention(embedding_dim, num_heads, dropout)
+        self.norm1 = nn.LayerNorm(embedding_dim)
+        self.norm2 = nn.LayerNorm(embedding_dim)
+        
+        # Feed-forward network
+        self.feed_forward = nn.Sequential(
+            nn.Linear(embedding_dim, embedding_dim * 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(embedding_dim * 4, embedding_dim)
+        )
+        
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x, timestamps, attention_mask=None):
+        # Multi-head attention with residual connection and layer norm
+        attn_output = self.attention(x, timestamps, attention_mask)
+        x = self.norm1(x + self.dropout(attn_output))
+        
+        # Feed forward with residual connection and layer norm
+        ff_output = self.feed_forward(x)
+        x = self.norm2(x + self.dropout(ff_output))
+        
+        return x
+
 class TimeAwareTransformer(nn.Module):
-    def __init__(self, input_dim, embedding_dim, num_heads, num_classes, dropout=0.1):
+    def __init__(self, input_dim, embedding_dim, num_heads, num_classes, num_layers=6, dropout=0.1):
         super().__init__()
         
         # Embedding layers
         self.time_embedding = Time2Vec(embedding_dim)
         self.feature_embedding = FeatureEmbedding(input_dim, embedding_dim)
         
-        # Time-aware attention
-        self.time_aware_attention = TimeAwareAttention(embedding_dim, num_heads)
+        # Positional encoding
+        self.pos_encoding = nn.Parameter(torch.zeros(1, 1000, embedding_dim))  # Max sequence length = 1000
+        nn.init.xavier_uniform_(self.pos_encoding)
+        
+        # Transformer blocks
+        self.transformer_blocks = nn.ModuleList([
+            TransformerBlock(embedding_dim, num_heads, dropout)
+            for _ in range(num_layers)
+        ])
+        
+        # Layer normalization
+        self.norm = nn.LayerNorm(embedding_dim)
         
         # Classification head
         self.classifier = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim // 2),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout),
+            nn.LayerNorm(embedding_dim // 2),
             nn.Linear(embedding_dim // 2, num_classes)
         )
         
-    def forward(self, features, timestamps):
+    def forward(self, features, timestamps, attention_mask=None):
         """
         Args:
             features: tensor shape [batch_size, seq_len, input_dim] - Close, Volume features
             timestamps: tensor shape [batch_size, seq_len, 1] - normalized timestamps
+            attention_mask: tensor shape [batch_size, seq_len] - attention mask (optional)
         Returns:
             tensor shape [batch_size, num_classes] - classification logits
         """
+        batch_size, seq_len, _ = features.shape
+        
         # Embed features và timestamps
         feature_emb = self.feature_embedding(features)  # [batch_size, seq_len, embedding_dim]
         time_emb = self.time_embedding(timestamps)  # [batch_size, seq_len, embedding_dim]
         
-        # Kết hợp embeddings
-        x = feature_emb + time_emb  # [batch_size, seq_len, embedding_dim]
+        # Kết hợp embeddings và positional encoding
+        x = feature_emb + time_emb + self.pos_encoding[:, :seq_len, :]  # [batch_size, seq_len, embedding_dim]
         
-        # Áp dụng time-aware attention
-        x = self.time_aware_attention(x, timestamps)  # [batch_size, seq_len, embedding_dim]
+        # Áp dụng các transformer blocks
+        for block in self.transformer_blocks:
+            x = block(x, timestamps, attention_mask)
+        
+        # Layer normalization
+        x = self.norm(x)
         
         # Lấy embedding của điểm cuối chuỗi
         x = x[:, -1, :]  # [batch_size, embedding_dim]
