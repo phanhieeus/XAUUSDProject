@@ -26,24 +26,29 @@ XAUUSDProject/
 
 ## Cài đặt
 
-1. Tạo môi trường Python và cài đặt các thư viện cần thiết:
+1. Tạo môi trường Python và cài đặt các thư viện cần thiết. Có 3 cách:
+
 ```bash
 # Cách 1: Sử dụng setup.sh (tải dữ liệu từ Kaggle)
 # Yêu cầu: Đặt file kaggle.json vào thư mục ~/.kaggle/
+# Script sẽ tự động tạo môi trường ảo và cài đặt các gói cần thiết
 chmod +x setup.sh
 ./setup.sh
 
 # Cách 2: Sử dụng setup_drive.sh (tải dữ liệu từ Google Drive)
 # Không yêu cầu kaggle.json, phù hợp khi không có quyền truy cập Kaggle
+# Script sẽ tự động tạo môi trường ảo và cài đặt các gói cần thiết
 chmod +x setup_drive.sh
 ./setup_drive.sh
 
 # Cách 3: Cài đặt thủ công
+# Tạo môi trường ảo
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 # hoặc
 venv\Scripts\activate  # Windows
 
+# Cài đặt các gói cần thiết
 pip install -r requirements.txt
 ```
 
