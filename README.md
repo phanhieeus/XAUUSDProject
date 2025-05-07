@@ -124,6 +124,6 @@ Mô hình được đánh giá dựa trên:
 - Có thể điều chỉnh các tham số trong `config.py` để tối ưu hiệu suất 
 
 Input (Close, Volume) ──┐
-                       ├─> Feature Embedding ─┐
-Timestamp ────────────┐│                     │
-                      │└─> Time2Vec ─────────┼─> Combined Embedding ─> Time-Aware Attention ─> Classification Head
+                        ├─>   Feature Embedding ─┐
+Timestamp ───────┐│                              │
+                  │__________> Time2Vec ─────────┼─> Combined Embedding ─> Time-Aware Attention ─> Classification Head
